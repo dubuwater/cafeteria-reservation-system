@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>오늘의 메뉴 · 학식 예약</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="m-app">
+  <header class="m-top">
+
+    <h1>오늘의 메뉴</h1>
+    <button class="btn-link" type="button" onclick="logout()">로그아웃</button>
+  </header>
+  <!-- S02 오늘의 메뉴 (FR-03, UC-03) -->
+  <main class="m-main">
+    <div class="muted small" id="today"></div>
+    <div class="seg" role="tablist" style="margin-top:8px">
+      <button type="button" role="tab" data-meal="LUNCH" class="active">중식</button>
+      <button type="button" role="tab" data-meal="DINNER">석식</button>
+    </div>
+    <div id="menu-list"></div>
+  </main>
+  <nav class="m-tabs" aria-label="학생 메뉴">
+    <a href="/student/menus.html" class="active" aria-current="page">오늘의 메뉴</a>
+    <a href="/student/my.html">내 예약</a>
+  </nav>
+</div>
+<script src="/js/common.js"></script>
+<script>
+/* MenuPage.init() — 설계서 5.5: 오늘 메뉴를 중식/석식 탭별로 표시하고 품절이면 예약하기를 막는다. */
+let menus = [];
+let meal = new Date().getHours() >= 14 ? 'DINNER' : 'LUNCH';
+
+function render() {
+  document.querySelectorAll('.seg button').forEach(b => b.classList.toggle('active', b.dataset.meal === meal));
+  const list = menus.filter(m => m.mealType === meal);
+  const box = document.getElementById('menu-list');
+  if (list.length === 0) {
+    box.innerHTML = '<div class="empty">오늘 ' + MEAL_LABEL[meal] + ' 메뉴가 없습니다</div>';
+    return;
+  }
+  box.innerHTML = list.map(m => `
+    <div class="card menu-card${m.soldOut ? ' soldout' : ''}">
+      <div class="info">
+        <div class="name">${escapeHtml(m.name)} · ${won(m.price)}</div>
+        <div class="small ${m.soldOut ? '' : 'muted'}" style="${m.soldOut ? 'color:var(--danger)' : ''}">
+          ${m.soldOut ? '품절' : '남은 수량 ' + m.remainingQuantity + '개'}
+        </div>
+      </div>
+      ${m.soldOut
+        ? '<button class="btn btn-sm" disabled>품절</button>'
+        : `<a class="btn btn-primary btn-sm" href="/student/reserve.html?menuId=${m.menuId}">예약하기</a>`}
+    </div>`).join('');
+}
+
+document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => { meal = b.dataset.meal; render(); }));
+
+(async () => {
+  if (!await requireRole('STUDENT')) return;
+  document.getElementById('today').textContent = todayLabel() + ' 오늘의 메뉴';
+  try {
+    menus = await api('GET', '/api/menus/today');
+    if (!menus.some(m => m.mealType === meal) && menus.length) meal = menus[0].mealType;
+    render();
+  } catch (e) { showToast(e.message); }
+})();
+</script>
+</body>
+</html>

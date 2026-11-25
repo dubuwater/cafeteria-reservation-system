@@ -1,0 +1,94 @@
+# 공통 설정 (설계서 2.4절, 7장)
+spring:
+  application:
+    name: cafeteria-reservation-system
+  profiles:
+    default: local
+  jpa:
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc.time_zone: Asia/Seoul
+  jackson:
+    time-zone: Asia/Seoul
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      force-request: true
+    session:
+      timeout: 30m              # EIR-NW-04: 30분 미사용 시 세션 만료
+      cookie:
+        http-only: true
+        same-site: lax
+
+app:
+  timezone: Asia/Seoul
+  seed:
+    accounts: true              # 계정·수령 시간대가 비어 있으면 초기 데이터 생성
+    demo-menus: true            # 오늘 메뉴가 없으면 시연용 메뉴 생성
+  mock-payment:
+    fail: false                 # true면 모의 결제가 항상 거절(실패 흐름 시연용)
+
+---
+# 로컬 개발·시연용: 설치 없이 실행되는 H2 파일 DB
+spring:
+  config:
+    activate:
+      on-profile: local
+  datasource:
+    url: jdbc:h2:file:./data/cafeteria;MODE=MySQL;DATABASE_TO_LOWER=TRUE;NON_KEYWORDS=USER;LOCK_TIMEOUT=5000
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+  h2:
+    console:
+      enabled: false
+
+---
+# 설계서 기준 실행 환경(NFR-09): MySQL 8.0
+spring:
+  config:
+    activate:
+      on-profile: mysql
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/cafeteria_db?serverTimezone=Asia/Seoul&characterEncoding=UTF-8&sessionVariables=innodb_lock_wait_timeout=5,transaction_isolation=%27READ-COMMITTED%27
+    username: ${DB_USERNAME:cafeteria}
+    password: ${DB_PASSWORD:cafeteria}
+    hikari:
+      maximum-pool-size: 10     # 설계서 7장 성능 설계
+  jpa:
+    hibernate:
+      ddl-auto: none
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-mysql.sql
+      encoding: UTF-8
+app:
+  seed:
+    demo-menus: false
+
+---
+# 운영 배포: HTTPS(443), Secure 쿠키 (EIR-NW-01, EIR-NW-04)
+spring:
+  config:
+    activate:
+      on-profile: prod
+server:
+  port: 443
+  ssl:
+    enabled: true
+    key-store: ${SSL_KEYSTORE:classpath:keystore.p12}
+    key-store-password: ${SSL_KEYSTORE_PASSWORD:changeit}
+    key-store-type: PKCS12
+  servlet:
+    session:
+      cookie:
+        secure: true

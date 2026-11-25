@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>수령 처리 · 학식 예약 관리</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="a-app">
+  <aside class="a-side">
+    <div class="brand">학식 예약 관리</div>
+    <nav aria-label="관리자 메뉴">
+      <a href="/admin/menus.html">메뉴 관리</a>
+      <a href="/admin/status.html">예약 현황</a>
+      <a href="/admin/pickup.html" class="active" aria-current="page">수령 처리</a>
+    </nav>
+    <div class="who"><span data-user-name></span><br><button class="btn-link" style="padding:4px 0" type="button" onclick="logout()">로그아웃</button></div>
+  </aside>
+  <!-- A03 수령 처리 (FR-15, UC-13~14) -->
+  <main class="a-main">
+    <h1>수령 처리</h1>
+    <div class="split">
+      <div>
+        <div class="scan-box"><div id="reader"></div><div id="scan-msg" class="muted small" style="padding:16px;text-align:center">카메라를 준비하는 중입니다…</div></div>
+        <form class="toolbar" id="code-form" style="margin-top:12px" novalidate>
+          <input class="input" id="code" placeholder="예약 번호 입력" inputmode="numeric" style="flex:1;min-width:160px" aria-label="예약 번호">
+          <button class="btn" type="submit">조회</button>
+        </form>
+      </div>
+      <div>
+        <div class="panel" id="info"><div class="muted">QR을 스캔하거나 예약 번호를 입력하면 예약 정보가 표시됩니다.</div></div>
+        <button class="btn btn-primary btn-block" id="pickup" type="button" style="margin-top:12px" disabled>수령 완료</button>
+        <div id="result" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="/js/common.js"></script>
+<script>
+/* PickupPage — 설계서 5.4 */
+const state = { code: null };
+const pickupButton = document.getElementById('pickup');
+const codeInput = document.getElementById('code');
+let scanner = null;
+let paused = false;
+
+function showResult(kind, message) {
+  document.getElementById('result').innerHTML = message ? `<div class="result ${kind}">${escapeHtml(message)}</div>` : '';
+}
+
+/* PickupPage.onCode(code): 예약 정보를 조회해 표시하고 수령 완료 버튼을 켠다. 상태는 바꾸지 않는다(FR-15). */
+async function onCode(code) {
+  code = String(code || '').trim();
+  if (!code) return;
+  showResult(null, '');
+  try {
+    const t = await api('GET', '/api/admin/tickets/lookup?code=' + encodeURIComponent(code));
+    const usable = t.ticketStatus === 'VALID' && t.reservationStatus === 'RESERVED';
+    document.getElementById('info').innerHTML = `
+      <div style="font-weight:700;font-size:17px">예약 #${t.reservationId} · ${escapeHtml(t.studentName)}</div>
+      <div style="margin-top:4px">${escapeHtml(t.menuName)} ${t.quantity}개 · ${t.saleDate} ${slotLabel(t.startTime, t.endTime)}</div>
+      <div style="margin-top:6px;font-weight:700;color:${usable ? 'var(--success)' : 'var(--danger)'}">
+        식권 상태: ${usable ? '유효' : t.ticketStatus === 'USED' ? '이미 수령됨' : '취소됨(무효)'}</div>`;
+    state.code = code;
+    pickupButton.disabled = !usable;
+    if (usable) pickupButton.focus();
+  } catch (err) {
+    state.code = null;
+    pickupButton.disabled = true;
+    document.getElementById('info').innerHTML = '<div class="muted">예약 정보 없음</div>';
+    showResult('error', err.message);
+  }
+}
+
+/* PickupPage.onConfirm(): 수령 처리 API를 호출하고 결과를 크게 표시한다(FR-15, DR-08). */
+async function onConfirm() {
+  if (!state.code) return;
+  setBusy(pickupButton, true);
+  try {
+    await api('POST', '/api/admin/pickups', { code: state.code });
+    showResult('success', '수령 완료');
+  } catch (err) {
+    showResult('error', err.message);
+  } finally {
+    setBusy(pickupButton, false);
+    pickupButton.disabled = true;
+    state.code = null;
+    codeInput.value = '';
+    codeInput.focus();
+  }
+}
+
+/* QR 스캔: 같은 QR을 연속으로 읽지 않도록 2초 동안 멈춘다. 카메라를 쓸 수 없으면 직접 입력으로 대체한다(EIR-HW-03). */
+function startScanner() {
+  const msg = document.getElementById('scan-msg');
+  if (typeof Html5Qrcode === 'undefined') { msg.textContent = 'QR 스캔 라이브러리를 불러오지 못했습니다. 예약 번호를 입력하세요.'; return; }
+  scanner = new Html5Qrcode('reader');
+  scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 220 }, (text) => {
+    if (paused) return;
+    paused = true;
+    onCode(text);
+    setTimeout(() => { paused = false; }, 2000);
+  }, () => {}).then(() => msg.classList.add('hidden'))
+    .catch(() => { msg.textContent = '카메라를 사용할 수 없습니다. 예약 번호를 직접 입력하세요.'; });
+}
+
+document.getElementById('code-form').addEventListener('submit', e => { e.preventDefault(); onCode(codeInput.value); });
+pickupButton.addEventListener('click', onConfirm);
+
+(async () => {
+  if (!await requireRole('ADMIN')) return;
+  codeInput.focus();
+  startScanner();
+})();
+</script>
+</body>
+</html>

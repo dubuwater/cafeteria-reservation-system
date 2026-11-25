@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>예약 현황 · 학식 예약 관리</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="a-app">
+  <aside class="a-side">
+    <div class="brand">학식 예약 관리</div>
+    <nav aria-label="관리자 메뉴">
+      <a href="/admin/menus.html">메뉴 관리</a>
+      <a href="/admin/status.html" class="active" aria-current="page">예약 현황</a>
+      <a href="/admin/pickup.html">수령 처리</a>
+    </nav>
+    <div class="who"><span data-user-name></span><br><button class="btn-link" style="padding:4px 0" type="button" onclick="logout()">로그아웃</button></div>
+  </aside>
+  <!-- A02 예약 현황 (FR-14, UC-12) -->
+  <main class="a-main">
+    <h1>예약 현황</h1>
+    <div class="toolbar">
+      <input class="input" type="date" id="date" aria-label="조회 날짜">
+      <button class="btn" type="button" id="refresh">새로고침</button>
+      <span class="spacer"></span>
+      <span class="muted small" id="updated"></span>
+    </div>
+    <div class="split">
+      <div>
+        <table class="grid">
+          <thead><tr><th>구분</th><th>시간대</th><th class="num">정원</th><th class="num">예약 건수</th><th class="num">수령완료</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="note">예약 건수는 예약완료·수령완료 건만 셉니다(수량 3개 예약도 1건). 30초마다 자동으로 새로고침합니다.</div>
+      </div>
+      <div class="panel">
+        <h2 id="detail-title">시간대를 선택하세요</h2>
+        <div id="detail" class="muted small">왼쪽 표에서 시간대 행을 누르면 예약 목록이 표시됩니다.</div>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="/js/common.js"></script>
+<script>
+/* StatusPage.init(date) — 설계서 5.5 */
+const dateInput = document.getElementById('date');
+let slots = [];
+let selected = null;
+
+async function load() {
+  slots = await api('GET', '/api/admin/reservations/status?date=' + dateInput.value);
+  document.getElementById('rows').innerHTML = slots.map(s => {
+    const full = s.reservedCount >= s.capacity;
+    return `<tr class="clickable${selected === s.slotId ? ' selected' : ''}" data-slot="${s.slotId}" tabindex="0">
+      <td>${MEAL_LABEL[s.mealType]}</td>
+      <td>${slotLabel(s.startTime, s.endTime)}</td>
+      <td class="num">${s.capacity}</td>
+      <td class="num">${s.reservedCount}${full ? ' <span class="badge badge-soldout">마감</span>' : ''}</td>
+      <td class="num">${s.pickedUpCount}</td>
+    </tr>`;
+  }).join('');
+  document.querySelectorAll('[data-slot]').forEach(tr => {
+    const open = () => { selected = Number(tr.dataset.slot); load(); };
+    tr.addEventListener('click', open);
+    tr.addEventListener('keydown', e => { if (e.key === 'Enter') open(); });
+  });
+  document.getElementById('updated').textContent = new Date().toLocaleTimeString('ko-KR') + ' 기준';
+  if (selected) await loadDetail();
+}
+
+async function loadDetail() {
+  const s = slots.find(x => x.slotId === selected);
+  if (!s) return;
+  document.getElementById('detail-title').textContent = MEAL_LABEL[s.mealType] + ' ' + slotLabel(s.startTime, s.endTime) + ' 상세';
+  const list = await api('GET', '/api/admin/reservations?date=' + dateInput.value + '&slotId=' + selected);
+  const box = document.getElementById('detail');
+  box.classList.toggle('muted', list.length === 0);
+  box.innerHTML = list.length === 0 ? '예약이 없습니다' : `
+    <table class="grid">
+      <thead><tr><th>예약 번호</th><th>학생</th><th>메뉴</th><th class="num">수량</th><th>상태</th></tr></thead>
+      <tbody>${list.map(r => `<tr><td>#${r.reservationId}</td><td>${escapeHtml(r.studentName)}</td><td>${escapeHtml(r.menuName)}</td><td class="num">${r.quantity}</td><td>${statusBadge(r.status)}</td></tr>`).join('')}</tbody>
+    </table>`;
+}
+
+dateInput.addEventListener('change', () => { selected = null; document.getElementById('detail-title').textContent = '시간대를 선택하세요'; load(); });
+document.getElementById('refresh').addEventListener('click', load);
+
+(async () => {
+  if (!await requireRole('ADMIN')) return;
+  dateInput.value = isoDate();
+  try { await load(); } catch (e) { showToast(e.message); }
+  setInterval(() => { load().catch(() => {}); }, 30000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>결제 · 학식 예약</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="m-app">
+  <header class="m-top">
+    <button class="back" type="button" aria-label="뒤로 가기" onclick="history.back()">‹</button>
+    <h1>결제</h1>
+    <button class="btn-link" type="button" onclick="logout()">로그아웃</button>
+  </header>
+  <!-- S04 결제 (FR-06, UC-05) -->
+  <main class="m-main">
+    <div class="section-label" style="margin-top:0">주문 요약</div>
+    <div class="card" id="summary"></div>
+    <div class="section-label">결제 수단</div>
+    <div role="radiogroup">
+      <label class="option selected"><input type="radio" name="method" value="CARD" checked> 카드</label>
+      <label class="option"><input type="radio" name="method" value="SIMPLE_PAY"> 간편결제</label>
+    </div>
+    <div class="muted small" style="margin:4px 0 16px">모의 결제 · 실제 청구 없음</div>
+    <div class="field-error" id="pay-error" role="alert"></div>
+    <button class="btn btn-primary btn-block" id="confirm" type="button">결제 완료</button>
+  </main>
+  <nav class="m-tabs" aria-label="학생 메뉴">
+    <a href="/student/menus.html" class="active" aria-current="page">오늘의 메뉴</a>
+    <a href="/student/my.html">내 예약</a>
+  </nav>
+</div>
+<script src="/js/common.js"></script>
+<script>
+/* PayPage — 설계서 5.2 */
+const reservationId = queryParam('id');
+const confirmButton = document.getElementById('confirm');
+let menuId = null;
+
+document.querySelectorAll('input[name=method]').forEach(r => r.addEventListener('change', () => {
+  document.querySelectorAll('.option').forEach(o => o.classList.toggle('selected', o.contains(r)));
+}));
+
+/* PayPage.onConfirm(): 모의 결제를 요청하고 성공하면 S05, 재고·정원 부족이면 S03으로 이동한다(FR-06~07). */
+async function onConfirm() {
+  const checked = document.querySelector('input[name=method]:checked');
+  if (!checked) { document.getElementById('pay-error').textContent = '결제 수단을 선택하세요'; return; }
+  document.getElementById('pay-error').textContent = '';
+  setBusy(confirmButton, true, '결제 중입니다');
+  try {
+    await api('POST', '/api/reservations/' + reservationId + '/payment', { method: checked.value });
+    location.replace('/student/ticket.html?id=' + reservationId);   // 뒤로 가기로 재결제 방지
+  } catch (err) {
+    if (err.code === 'STOCK_SHORTAGE' || err.code === 'SLOT_FULL') {
+      alert(err.message);
+      location.replace('/student/reserve.html?menuId=' + menuId);  // S03에서 다시 선택
+      return;
+    }
+    document.getElementById('pay-error').textContent = err.message;
+    setBusy(confirmButton, false);
+  }
+}
+confirmButton.addEventListener('click', onConfirm);
+
+(async () => {
+  if (!await requireRole('STUDENT')) return;
+  try {
+    const r = await api('GET', '/api/reservations/' + encodeURIComponent(reservationId));
+    if (r.status === 'RESERVED') { location.replace('/student/ticket.html?id=' + reservationId); return; }
+    if (r.status !== 'PENDING') { location.replace('/student/my.html'); return; }
+    menuId = r.menuId;
+    document.getElementById('summary').innerHTML = `
+      <div class="summary-row"><span>${escapeHtml(r.menuName)} × ${r.quantity}</span><span>${won(r.totalPrice)}</span></div>
+      <div class="summary-row muted small"><span>수령 시간</span><span>${MEAL_LABEL[r.mealType]} ${slotLabel(r.startTime, r.endTime)}</span></div>
+      <div class="summary-row" style="font-weight:700;margin-top:6px"><span>총 금액</span><span>${won(r.totalPrice)}</span></div>`;
+  } catch (e) {
+    showToast(e.message);
+    setTimeout(() => location.replace('/student/menus.html'), 1500);
+  }
+})();
+</script>
+</body>
+</html>

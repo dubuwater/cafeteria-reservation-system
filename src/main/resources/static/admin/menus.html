@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>메뉴 관리 · 학식 예약 관리</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="a-app">
+  <aside class="a-side">
+    <div class="brand">학식 예약 관리</div>
+    <nav aria-label="관리자 메뉴">
+      <a href="/admin/menus.html" class="active" aria-current="page">메뉴 관리</a>
+      <a href="/admin/status.html">예약 현황</a>
+      <a href="/admin/pickup.html">수령 처리</a>
+    </nav>
+    <div class="who"><span data-user-name></span><br><button class="btn-link" style="padding:4px 0" type="button" onclick="logout()">로그아웃</button></div>
+  </aside>
+  <!-- A01 메뉴 관리 (FR-12~13, UC-11) -->
+  <main class="a-main">
+    <h1>메뉴 관리</h1>
+    <div class="toolbar">
+      <input class="input" type="date" id="date" aria-label="판매 날짜">
+      <div class="seg-inline" role="tablist">
+        <button type="button" data-meal="LUNCH" class="active">중식</button>
+        <button type="button" data-meal="DINNER">석식</button>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn btn-primary" type="button" id="add">+ 메뉴 등록</button>
+    </div>
+    <table class="grid">
+      <thead><tr><th>메뉴 이름</th><th class="num">가격(원)</th><th class="num">총 판매 수량</th><th class="num">남은 수량</th><th class="num">확보 수량</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="note">총 판매 수량은 확보 수량(예약완료·수령완료 수량 합계)보다 작게 수정할 수 없습니다. 예약이 있는 메뉴는 판매 날짜와 식사 구분을 바꿀 수 없습니다.</div>
+  </main>
+</div>
+
+<div class="modal-back hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <form class="modal" id="menu-form" novalidate>
+    <h2 id="modal-title">메뉴 등록</h2>
+    <div class="row">
+      <div class="field"><label for="f-date">판매 날짜</label><input class="input" type="date" id="f-date"><div class="field-error" id="f-date-error"></div></div>
+      <div class="field"><label for="f-meal">식사 구분</label>
+        <select class="input" id="f-meal"><option value="LUNCH">중식</option><option value="DINNER">석식</option></select></div>
+    </div>
+    <div class="field"><label for="f-name">메뉴 이름</label><input class="input" id="f-name" maxlength="50"><div class="field-error" id="f-name-error"></div></div>
+    <div class="row">
+      <div class="field"><label for="f-price">가격(원)</label><input class="input" type="number" min="1" id="f-price"><div class="field-error" id="f-price-error"></div></div>
+      <div class="field"><label for="f-qty">판매 수량</label><input class="input" type="number" min="1" id="f-qty"><div class="field-error" id="f-qty-error"></div></div>
+    </div>
+    <div class="field-error" id="f-form-error" role="alert"></div>
+    <div class="buttons">
+      <button class="btn" type="button" id="cancel">취소</button>
+      <button class="btn btn-primary" type="submit" id="save">저장</button>
+    </div>
+  </form>
+</div>
+<script src="/js/common.js"></script>
+<script>
+/* MenuAdminPage — 설계서 5.5 */
+const dateInput = document.getElementById('date');
+let meal = 'LUNCH';
+let menus = [];
+let editingId = null;
+
+async function load() {
+  document.querySelectorAll('.seg-inline button').forEach(b => b.classList.toggle('active', b.dataset.meal === meal));
+  menus = await api('GET', '/api/admin/menus?date=' + dateInput.value + '&mealType=' + meal);
+  const rows = document.getElementById('rows');
+  if (menus.length === 0) {
+    rows.innerHTML = '<tr><td colspan="6" class="muted" style="text-align:center;padding:32px">등록된 메뉴가 없습니다</td></tr>';
+    return;
+  }
+  rows.innerHTML = menus.map(m => `
+    <tr>
+      <td>${escapeHtml(m.name)}${m.soldOut ? ' <span class="badge badge-soldout">품절</span>' : ''}</td>
+      <td class="num">${m.price.toLocaleString('ko-KR')}</td>
+      <td class="num">${m.totalQuantity}</td>
+      <td class="num">${m.remainingQuantity}</td>
+      <td class="num">${m.totalQuantity - m.remainingQuantity}</td>
+      <td class="num"><button class="btn btn-sm" type="button" data-edit="${m.menuId}">수정</button></td>
+    </tr>`).join('');
+  rows.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openForm(menus.find(m => m.menuId === Number(b.dataset.edit)))));
+}
+
+function openForm(menu) {
+  clearFieldErrors(document.getElementById('menu-form'));
+  editingId = menu ? menu.menuId : null;
+  document.getElementById('modal-title').textContent = menu ? '메뉴 수정' : '메뉴 등록';
+  document.getElementById('f-date').value = menu ? menu.saleDate : dateInput.value;
+  document.getElementById('f-meal').value = menu ? menu.mealType : meal;
+  document.getElementById('f-name').value = menu ? menu.name : '';
+  document.getElementById('f-price').value = menu ? menu.price : '';
+  document.getElementById('f-qty').value = menu ? menu.totalQuantity : '';
+  document.getElementById('modal').classList.remove('hidden');
+  document.getElementById('f-name').focus();
+}
+
+function closeForm() { document.getElementById('modal').classList.add('hidden'); }
+
+/* MenuAdminPage.onSave(): 이름·가격·수량 검사 → 신규는 POST, 수정은 PUT → 409면 입력 창에 표시 → 목록 다시 조회 */
+async function onSave(e) {
+  e.preventDefault();
+  const form = document.getElementById('menu-form');
+  clearFieldErrors(form);
+  const f = id => document.getElementById(id);
+  const body = {
+    saleDate: f('f-date').value,
+    mealType: f('f-meal').value,
+    name: f('f-name').value.trim(),
+    price: Number(f('f-price').value),
+    totalQuantity: Number(f('f-qty').value),
+  };
+  if (!body.saleDate) return showFieldError(f('f-date'), '판매 날짜를 선택하세요');
+  if (!body.name) return showFieldError(f('f-name'), '메뉴 이름은 필수입니다');
+  if (!(body.price > 0)) return showFieldError(f('f-price'), '가격은 0원보다 커야 합니다');
+  if (!(body.totalQuantity >= 1) || !Number.isInteger(body.totalQuantity)) return showFieldError(f('f-qty'), '판매 수량은 1개 이상이어야 합니다');
+  const save = f('save');
+  setBusy(save, true);
+  try {
+    if (editingId) await api('PUT', '/api/admin/menus/' + editingId, body);
+    else await api('POST', '/api/admin/menus', body);
+    closeForm();
+    showToast(editingId ? '수정되었습니다' : '등록되었습니다');
+    if (body.saleDate === dateInput.value) meal = body.mealType;
+    await load();
+  } catch (err) {
+    const target = err.code === 'BELOW_SECURED' || err.code === 'QTY_RANGE' ? f('f-qty')
+      : err.code === 'DATE_LOCKED' ? f('f-date')
+      : err.code === 'PRICE_RANGE' ? f('f-price')
+      : err.code && err.code.startsWith('NAME') ? f('f-name') : null;
+    if (target) showFieldError(target, err.message); else f('f-form-error').textContent = err.message;
+  } finally {
+    setBusy(save, false);
+  }
+}
+
+document.querySelectorAll('.seg-inline button').forEach(b => b.addEventListener('click', () => { meal = b.dataset.meal; load(); }));
+dateInput.addEventListener('change', load);
+document.getElementById('add').addEventListener('click', () => openForm(null));
+document.getElementById('cancel').addEventListener('click', closeForm);
+document.getElementById('menu-form').addEventListener('submit', onSave);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeForm(); });
+
+(async () => {
+  if (!await requireRole('ADMIN')) return;
+  dateInput.value = isoDate();
+  meal = new Date().getHours() >= 14 ? 'DINNER' : 'LUNCH';
+  try { await load(); } catch (e) { showToast(e.message); }
+})();
+</script>
+</body>
+</html>
