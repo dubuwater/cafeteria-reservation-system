@@ -19,6 +19,11 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 repositories {
+    // Docker 빌드에서는 MAVEN_MIRROR(Google의 Maven Central 미러)를 먼저 쓴다(settings.gradle 참고).
+    def mirror = System.getenv('MAVEN_MIRROR')
+    if (mirror) {
+        maven { url = uri(mirror) }
+    }
     mavenCentral()
 }
 

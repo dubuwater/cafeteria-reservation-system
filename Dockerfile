@@ -2,9 +2,11 @@
 # 1단계: Gradle Wrapper로 실행 jar 빌드
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /app
+# 클라우드 빌드 서버에서 Maven Central 대신 Google 미러로 라이브러리를 받는다.
+ENV MAVEN_MIRROR=https://maven-central.storage-download.googleapis.com/maven2/
 COPY gradlew settings.gradle build.gradle ./
 COPY gradle ./gradle
-RUN chmod +x gradlew && ./gradlew --no-daemon dependencies > /dev/null
+RUN chmod +x gradlew && ./gradlew --no-daemon dependencies
 COPY src ./src
 RUN ./gradlew --no-daemon bootJar -x test
 

@@ -1,5 +1,12 @@
+// MAVEN_MIRROR 환경 변수가 있으면 그 저장소를 먼저 쓴다(Docker 빌드에서 사용).
+// 클라우드 빌드 서버는 Maven Central 접속이 막히는 경우가 있어 Google 미러를 지정한다.
+
 pluginManagement {
+    def pluginMirror = System.getenv('MAVEN_MIRROR')
     repositories {
+        if (pluginMirror) {
+            maven { url = uri(pluginMirror) }
+        }
         mavenCentral()
         gradlePluginPortal()
     }
