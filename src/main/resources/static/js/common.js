@@ -46,8 +46,10 @@ async function api(method, url, body) {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
   if (res.status === 401 && !(data && data.code === 'LOGIN_FAILED')) {
-    location.href = LOGIN_PAGE;
-    throw { code: 'UNAUTHORIZED', message: '로그인이 필요합니다' };
+    // 다른 기기에서 같은 계정으로 로그인하면 이 세션은 만료된다(나중 로그인 우선).
+    const expired = data && data.code === 'SESSION_EXPIRED';
+    location.href = LOGIN_PAGE + (expired ? '?reason=expired' : '');
+    throw { code: expired ? 'SESSION_EXPIRED' : 'UNAUTHORIZED', message: expired ? data.message : '로그인이 필요합니다' };
   }
   if (!res.ok) {
     if (res.status === 403 && !(data && data.code)) {

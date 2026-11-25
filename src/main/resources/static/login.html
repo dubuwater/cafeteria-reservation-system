@@ -13,6 +13,9 @@
     <h1>학식 예약</h1>
     <div class="muted">학생식당 사전 예약</div>
   </div>
+  <div class="result error hidden" id="expired-notice" role="alert" style="margin:0 0 16px;font-size:var(--font-small)">
+    다른 기기에서 같은 계정으로 로그인되어 로그아웃되었습니다.
+  </div>
   <form id="login-form" novalidate>
     <div class="field">
       <label for="login-id">학번 또는 아이디</label>
@@ -37,6 +40,11 @@ const form = document.getElementById('login-form');
 const idInput = document.getElementById('login-id');
 const pwInput = document.getElementById('login-pw');
 const loginButton = document.getElementById('login-button');
+
+if (queryParam('reason') === 'expired') {
+  document.getElementById('expired-notice').classList.remove('hidden');
+  history.replaceState(null, '', LOGIN_PAGE);
+}
 
 // 이미 로그인되어 있으면 첫 화면으로 보낸다. 이 요청으로 XSRF-TOKEN 쿠키도 받는다.
 fetch('/api/auth/me', { credentials: 'same-origin' })

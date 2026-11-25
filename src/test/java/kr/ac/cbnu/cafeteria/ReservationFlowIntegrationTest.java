@@ -468,6 +468,45 @@ class ReservationFlowIntegrationTest {
         assertThat(lunchSets).hasSize(7);
     }
 
+    @Test
+    @DisplayName("나중 로그인 우선: 같은 계정으로 다른 기기에서 로그인하면 이전 세션은 만료된다")
+    void laterLoginExpiresEarlierSession() throws Exception {
+        MockHttpSession first = (MockHttpSession) mvc.perform(
+                        postJson("/api/auth/login", Map.of("id", "20240002", "pw", "student1234")))
+                .andExpect(status().isOk()).andReturn().getRequest().getSession();
+        mvc.perform(get("/api/menus/today").session(first)).andExpect(status().isOk());
+
+        MockHttpSession second = (MockHttpSession) mvc.perform(
+                        postJson("/api/auth/login", Map.of("id", "20240002", "pw", "student1234")))
+                .andExpect(status().isOk()).andReturn().getRequest().getSession();
+
+        mvc.perform(get("/api/menus/today").session(first))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("SESSION_EXPIRED"))
+                .andExpect(jsonPath("$.message").value("다른 기기에서 로그인되어 로그아웃되었습니다"));
+        mvc.perform(get("/api/menus/today").session(second)).andExpect(status().isOk());
+
+        // 다른 계정의 세션에는 영향이 없다
+        MockHttpSession other = (MockHttpSession) mvc.perform(
+                        postJson("/api/auth/login", Map.of("id", "admin", "pw", "admin1234")))
+                .andExpect(status().isOk()).andReturn().getRequest().getSession();
+        mvc.perform(get("/api/menus/today").session(second)).andExpect(status().isOk());
+        mvc.perform(get("/api/admin/menus").session(other)).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("만료된 세션으로 화면을 열면 안내와 함께 로그인 화면으로 이동한다")
+    void expiredSessionRedirectsPages() throws Exception {
+        MockHttpSession first = (MockHttpSession) mvc.perform(
+                        postJson("/api/auth/login", Map.of("id", "20240002", "pw", "student1234")))
+                .andReturn().getRequest().getSession();
+        mvc.perform(postJson("/api/auth/login", Map.of("id", "20240002", "pw", "student1234")));
+        mvc.perform(get("/student/menus.html").session(first))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .redirectedUrl("/login.html?reason=expired"));
+    }
+
     @SuppressWarnings("unused")
     private static LocalDateTime at(int h, int m, int s) {
         return DAY.atTime(h, m, s);
