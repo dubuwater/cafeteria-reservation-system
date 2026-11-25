@@ -53,6 +53,26 @@ GRANT ALL PRIVILEGES ON cafeteria_db.* TO 'cafeteria'@'localhost';
 테이블은 시작 시 `src/main/resources/schema-mysql.sql`(설계서 3.1절 스키마, `CREATE TABLE IF NOT EXISTS`)로 만들어집니다.
 MySQL 프로필에서는 시연용 메뉴를 만들지 않으므로 관리자 화면에서 메뉴를 등록하세요.
 
+## 클라우드 배포 (Render 무료 플랜, 시연용)
+
+저장소의 `Dockerfile`과 `render.yaml`로 Render에 배포합니다. HTTPS 주소가 자동으로 생겨서
+휴대폰 카메라로도 QR을 스캔할 수 있습니다.
+
+1. https://render.com 에 GitHub 계정으로 가입합니다(카드 등록 불필요).
+2. 대시보드에서 **New → Blueprint**를 고르고 이 저장소를 연결합니다.
+3. `render.yaml`이 인식되면 **Apply**를 누릅니다. 첫 빌드는 5~10분 걸립니다.
+4. 완료되면 `https://cafeteria-reservation-xxxx.onrender.com` 형태의 주소로 접속합니다.
+
+`main` 브랜치에 push하면 자동으로 다시 배포됩니다.
+
+**무료 플랜 주의사항**
+
+- 15분 동안 접속이 없으면 서버가 잠들고, 다음 접속 때 깨어나는 데 1분 정도 걸립니다. 시연 몇 분 전에 미리 접속해 두세요.
+- `render` 프로필은 메모리 DB를 씁니다. 서버가 잠들거나 재배포되면 예약 기록이 사라지고, 깨어날 때 계정·시간대·그날 메뉴가 새로 만들어집니다.
+- 서버 시각은 Asia/Seoul 기준입니다.
+
+로컬에서 배포 설정을 시험하려면 `--spring.profiles.active=render`로 실행합니다(HTTPS 프록시 뒤를 전제로 쿠키에 Secure가 붙으므로, http://localhost 에서는 로그인이 유지되지 않습니다).
+
 ### 배포용 HTTPS (EIR-NW-01)
 
 ```bash

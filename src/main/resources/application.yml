@@ -92,3 +92,34 @@ server:
     session:
       cookie:
         secure: true
+
+---
+# 클라우드 시연용(Render 무료 플랜): 프록시 뒤 HTTPS, 메모리 DB.
+# 서버가 잠들었다 깨면 데이터가 초기화되고, 계정·시간대·그날 메뉴가 다시 생성된다.
+spring:
+  config:
+    activate:
+      on-profile: render
+  datasource:
+    url: jdbc:h2:mem:cafeteria;MODE=MySQL;DATABASE_TO_LOWER=TRUE;NON_KEYWORDS=USER;LOCK_TIMEOUT=5000;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    hikari:
+      maximum-pool-size: 5
+  jpa:
+    hibernate:
+      ddl-auto: create
+server:
+  port: ${PORT:8080}
+  forward-headers-strategy: framework   # Render의 HTTPS 프록시 헤더(X-Forwarded-Proto)를 신뢰
+  tomcat:
+    threads:
+      max: 30
+  servlet:
+    session:
+      cookie:
+        secure: true
+app:
+  seed:
+    accounts: true
+    demo-menus: true

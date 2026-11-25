@@ -1,0 +1,13 @@
+# Render Blueprint: 저장소를 연결하면 이 설정으로 무료 웹 서비스 1개를 만든다.
+services:
+  - type: web
+    name: cafeteria-reservation
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /login.html
+    autoDeploy: true
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: render
