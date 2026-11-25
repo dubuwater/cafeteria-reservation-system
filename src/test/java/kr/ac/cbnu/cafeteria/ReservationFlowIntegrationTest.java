@@ -2,6 +2,7 @@ package kr.ac.cbnu.cafeteria;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import kr.ac.cbnu.cafeteria.config.DemoMenuSeeder;
 import kr.ac.cbnu.cafeteria.domain.Admin;
 import kr.ac.cbnu.cafeteria.domain.BusinessException;
 import kr.ac.cbnu.cafeteria.domain.MealType;
@@ -83,6 +84,7 @@ class ReservationFlowIntegrationTest {
     @Autowired PaymentRepository payments;
     @Autowired TicketRepository tickets;
     @Autowired ReservationService reservationService;
+    @Autowired DemoMenuSeeder demoMenuSeeder;
 
     Integer lunchMenuId;
     Integer noonSlotId;
@@ -446,6 +448,24 @@ class ReservationFlowIntegrationTest {
         JsonNode today = json.readTree(mvc.perform(get("/api/menus/today").with(student("20240001")))
                 .andReturn().getResponse().getContentAsString());
         assertThat(today.findValuesAsText("name")).doesNotContain("내일메뉴");
+    }
+
+    @Test
+    @DisplayName("시연용 메뉴: 요일마다 다른 세트(중식 3, 석식 2)를 만들고, 이미 있으면 다시 만들지 않는다")
+    void weekdayDemoMenus() {
+        menus.deleteAll();
+        java.util.Set<String> lunchSets = new java.util.HashSet<>();
+        for (int i = 0; i < 7; i++) {
+            LocalDate d = DAY.plusDays(i);
+            assertThat(demoMenuSeeder.seedFor(d)).isEqualTo(5);
+            assertThat(demoMenuSeeder.seedFor(d)).isZero();
+            List<Menu> day = menus.findBySaleDateOrderByMenuIdAsc(d);
+            assertThat(day).filteredOn(m -> m.getMealType() == MealType.LUNCH).hasSize(3);
+            assertThat(day).filteredOn(m -> m.getMealType() == MealType.DINNER).hasSize(2);
+            lunchSets.add(day.stream().filter(m -> m.getMealType() == MealType.LUNCH)
+                    .map(Menu::getName).sorted().toList().toString());
+        }
+        assertThat(lunchSets).hasSize(7);
     }
 
     @SuppressWarnings("unused")
