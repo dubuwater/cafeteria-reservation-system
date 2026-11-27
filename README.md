@@ -51,7 +51,7 @@ GRANT ALL PRIVILEGES ON cafeteria_db.* TO 'cafeteria'@'localhost';
 
 ```bash
 ./gradlew bootRun --args='--spring.profiles.active=mysql'
-# 계정 정보를 바꾸려면 DB_USERNAME, DB_PASSWORD 환경 변수를 지정합니다.
+# 연결 주소와 계정을 바꾸려면 DB_URL, DB_USERNAME, DB_PASSWORD 환경 변수를 지정합니다.
 ```
 
 테이블은 시작 시 `src/main/resources/schema-mysql.sql`(설계서 3.1절 스키마, `CREATE TABLE IF NOT EXISTS`)로 만들어집니다.
@@ -72,10 +72,15 @@ MySQL 프로필에서는 시연용 메뉴를 만들지 않으므로 관리자 �
 **무료 플랜 주의사항**
 
 - 15분 동안 접속이 없으면 서버가 잠들고, 다음 접속 때 깨어나는 데 1분 정도 걸립니다. 시연 몇 분 전에 미리 접속해 두세요.
-- `render` 프로필은 메모리 DB를 씁니다. 서버가 잠들거나 재배포되면 예약 기록이 사라지고, 깨어날 때 계정·시간대·그날 요일의 메뉴가 새로 만들어집니다. 계정 아이디와 비밀번호는 항상 위 표와 같습니다.
+- 기본 Blueprint의 `render` 단독 프로필은 시연용 메모리 DB를 씁니다. 서버 프로세스가 다시 시작되면 예약 기록이 사라지고, 계정·시간대·그날 요일의 메뉴가 새로 만들어집니다.
 - 서버 시각은 Asia/Seoul 기준입니다.
 
 로컬에서 배포 설정을 시험하려면 `--spring.profiles.active=render`로 실행합니다(HTTPS 프록시 뒤를 전제로 쿠키에 Secure가 붙으므로, http://localhost 에서는 로그인이 유지되지 않습니다).
+
+예약 기록을 보존하는 배포에서는 연결 가능한 MySQL 8.0에 `cafeteria_db`를 준비합니다. Render 서비스 환경 변수의
+`SPRING_PROFILES_ACTIVE`를 `render,mysql`로 바꾸고 `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`를 지정합니다.
+`DB_URL`은 로컬 MySQL 예시의 시간대·트랜잭션 옵션과 DB 제공자가 지정하는 TLS 옵션을 사용합니다.
+이 구성은 배포 시 테이블을 유지하며, 빈 DB에서 시작한다면 메뉴는 관리자 화면에서 등록합니다.
 
 ### 배포용 HTTPS (EIR-NW-01)
 
@@ -91,10 +96,26 @@ SSL_KEYSTORE=file:keystore.p12 SSL_KEYSTORE_PASSWORD=<암호> \
 
 ### 백업과 복원 (NFR-08)
 
+서버의 MySQL 8 클라이언트가 백업 계정으로 `cafeteria_db`를 덤프할 수 있도록 클라이언트 옵션 파일을 설정합니다.
+`BACKUP_COPY_DIR`은 서버 디스크와 분리된 저장 장치를 마운트한 경로입니다.
+
 ```bash
-mysqldump --single-transaction cafeteria_db | gzip > cafeteria_$(date +%Y%m%d).sql.gz
-gunzip < cafeteria_YYYYMMDD.sql.gz | mysql cafeteria_db
+BACKUP_DIR=/var/backups/cafeteria BACKUP_COPY_DIR=/mnt/backup/cafeteria \
+  bash scripts/backup.sh backup
+
+# 시험용 MySQL 서버에서, 비어 있는 전용 DB를 만들어 복원합니다.
+mysql -e 'CREATE DATABASE cafeteria_restore_test CHARACTER SET utf8mb4'
+bash scripts/backup.sh verify /var/backups/cafeteria/cafeteria_YYYYMMDD_HHMMSS.sql.gz
 ```
+
+백업 명령은 두 위치에 파일을 저장하고 7일이 지난 백업을 정리합니다. 복원 검증 명령은 덤프와 복원 DB의
+예약·결제·식권 행 수를 대조합니다. 서버 시간대를 `Asia/Seoul`로 설정한 뒤 매일 02:00에 실행하도록 crontab에 등록합니다.
+
+```cron
+0 2 * * * BACKUP_DIR=/var/backups/cafeteria BACKUP_COPY_DIR=/mnt/backup/cafeteria /usr/bin/bash /opt/cafeteria/scripts/backup.sh backup >> /var/backups/cafeteria/backup.log 2>&1
+```
+
+위 cron 예시에서는 로그를 쓸 `/var/backups/cafeteria`와 복사 대상 디렉터리를 미리 준비합니다.
 
 ## 테스트
 
@@ -102,12 +123,26 @@ gunzip < cafeteria_YYYYMMDD.sql.gz | mysql cafeteria_db
 ./gradlew test
 ```
 
-24개 테스트가 설계서의 업무 규칙과 비기능 요구사항을 검증합니다.
+기본 테스트 30개가 설계서의 업무 규칙을 검증합니다.
 
 | 테스트 | 검증 내용 |
 | --- | --- |
 | `DomainRulesTest` | 재고 차감 시점(DR-03), 정원 경계값 29·30건(DR-04), 취소 기한 11:30:00 허용·11:30:01 거절(DR-05), 식권 1회 사용(DR-08), 가격 변경 후 총액 유지(DR-11) |
-| `ReservationFlowIntegrationTest` | 로그인·로그아웃, 접근 통제(401/403), CSRF, 예약→결제→식권→수령 전체 흐름, 결제 재전송 1회 반영, 확정 직전 재고·정원 재검사, 취소·환불, 메뉴 수정 제약, **남은 수량 1개에 동시 확정 시 1건만 성공**, 중복 취소 1회 반영 |
+| `ReservationFlowIntegrationTest` | 예약부터 결제·식권·수령까지, 취소·환불, 결제 직전 날짜·식사 구분 변경, 마지막 재고·정원 동시 요청, 식권 저장 실패 시 롤백, 중복 요청 1회 반영, API 시간 형식 |
+| `CafeteriaLoadTest` | 선택 실행. 메뉴 20개·예약 1,000건·동시 학생 20명으로 실제 HTTP 조회 100회를 보내고 95번째 백분위 응답시간이 2초 이내인지 확인 |
+
+MySQL 8.0에서 검증할 때는 로컬 MySQL에 비어 있는 전용 DB `cafeteria_test`, `cafeteria_load_test`를 만들고
+해당 DB에 접근할 테스트 계정과 연결 포트를 지정합니다. 테스트가 이 DB에 시험 데이터를 만들고 정리합니다.
+
+```bash
+export CAFETERIA_TEST_MYSQL_PORT=3306
+export CAFETERIA_TEST_MYSQL_USER=cafeteria_test
+export CAFETERIA_TEST_MYSQL_PASSWORD='<테스트 계정 암호>'
+CAFETERIA_LOAD_TEST=true ./gradlew test --rerun-tasks
+```
+
+Windows PowerShell에서는 같은 값을 `$env:변수명`으로 설정한 뒤 `.\gradlew.bat test --rerun-tasks`를 실행합니다.
+MySQL 변수를 생략하면 H2에서 실행됩니다. 부하 시험 결과는 Gradle 테스트 보고서의 `CafeteriaLoadTest` 표준 출력에 기록됩니다.
 
 ## 프로젝트 구조
 

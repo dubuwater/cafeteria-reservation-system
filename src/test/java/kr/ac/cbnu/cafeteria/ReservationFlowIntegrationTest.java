@@ -26,12 +26,14 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -46,6 +48,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -62,7 +65,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class ReservationFlowIntegrationTest {
+class ReservationFlowIntegrationTest extends TestDatabase {
 
     static final LocalDate DAY = LocalDate.of(2026, 11, 26);
     static final MutableClock CLOCK = new MutableClock(DAY.atTime(10, 0));
@@ -86,6 +89,7 @@ class ReservationFlowIntegrationTest {
     @Autowired TicketRepository tickets;
     @Autowired ReservationService reservationService;
     @Autowired DemoMenuSeeder demoMenuSeeder;
+    @Autowired JdbcTemplate jdbc;
 
     Integer lunchMenuId;
     Integer noonSlotId;
@@ -388,22 +392,62 @@ class ReservationFlowIntegrationTest {
         int a = reserve("20240001", menuId, noonSlotId, 1);
         int b = reserve("20240002", menuId, noonSlotId, 1);
 
+        assertThat(confirmTogether(a, b)).containsExactlyInAnyOrder("OK", "STOCK_SHORTAGE");
+        assertThat(remaining(menuId)).isZero();
+        assertThat(payments.count()).isEqualTo(1);
+        assertThat(tickets.count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("동시성: 다른 메뉴라도 같은 시간대의 마지막 정원은 1건만 확보한다(NFR-04)")
+    void concurrentConfirmTakesLastSlotOnce() throws Exception {
+        int slotId = timeSlots.save(new TimeSlot(MealType.LUNCH, LocalTime.of(13, 30), LocalTime.of(14, 0), 1))
+                .getSlotId();
+        int otherMenuId = createMenu("비빔밥", 5000, MealType.LUNCH, 10).getMenuId();
+        int a = reserve("20240001", lunchMenuId, slotId, 1);
+        int b = reserve("20240002", otherMenuId, slotId, 1);
+
+        assertThat(confirmTogether(a, b)).containsExactlyInAnyOrder("OK", "SLOT_FULL");
+        assertThat(remaining(lunchMenuId) + remaining(otherMenuId)).isEqualTo(19);
+        assertThat(payments.count()).isEqualTo(1);
+        assertThat(tickets.count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("식권 저장 실패 시 결제·재고·예약 상태가 모두 롤백된다(NFR-04)")
+    void ticketInsertFailureRollsBackConfirmation() throws Exception {
+        int id = reserve("20240001", lunchMenuId, noonSlotId, 2);
+        jdbc.execute("ALTER TABLE tickets ADD CONSTRAINT test_ticket_insert_failure CHECK (status <> 'VALID')");
+        try {
+            assertThatThrownBy(() -> reservationService.confirm("20240001", id, "CARD"))
+                    .hasRootCauseInstanceOf(SQLException.class)
+                    .hasStackTraceContaining("test_ticket_insert_failure");
+        } finally {
+            jdbc.execute("ALTER TABLE tickets DROP CONSTRAINT test_ticket_insert_failure");
+        }
+        assertThat(reservations.findById(id).orElseThrow().getStatus()).isEqualTo(ReservationStatus.PENDING);
+        assertThat(payments.count()).isZero();
+        assertThat(tickets.count()).isZero();
+        assertThat(remaining(lunchMenuId)).isEqualTo(10);
+        pay("20240001", id);
+    }
+
+    private List<String> confirmTogether(int a, int b) throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         CountDownLatch start = new CountDownLatch(1);
         List<Callable<String>> jobs = List.of(
                 () -> { start.await(); return attempt("20240001", a); },
                 () -> { start.await(); return attempt("20240002", b); });
-        List<Future<String>> futures = new ArrayList<>();
-        for (Callable<String> job : jobs) futures.add(pool.submit(job));
-        start.countDown();
-        List<String> results = new ArrayList<>();
-        for (Future<String> f : futures) results.add(f.get(30, TimeUnit.SECONDS));
-        pool.shutdown();
-
-        assertThat(results).containsExactlyInAnyOrder("OK", "STOCK_SHORTAGE");
-        assertThat(remaining(menuId)).isZero();
-        assertThat(payments.count()).isEqualTo(1);
-        assertThat(tickets.count()).isEqualTo(1);
+        try {
+            List<Future<String>> futures = new ArrayList<>();
+            for (Callable<String> job : jobs) futures.add(pool.submit(job));
+            start.countDown();
+            List<String> results = new ArrayList<>();
+            for (Future<String> f : futures) results.add(f.get(30, TimeUnit.SECONDS));
+            return results;
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     private String attempt(String studentId, int reservationId) {
