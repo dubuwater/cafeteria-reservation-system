@@ -7,6 +7,7 @@ import kr.ac.cbnu.cafeteria.domain.Admin;
 import kr.ac.cbnu.cafeteria.domain.BusinessException;
 import kr.ac.cbnu.cafeteria.domain.MealType;
 import kr.ac.cbnu.cafeteria.domain.Menu;
+import kr.ac.cbnu.cafeteria.domain.ReservationStatus;
 import kr.ac.cbnu.cafeteria.domain.TimeSlot;
 import kr.ac.cbnu.cafeteria.repository.AdminRepository;
 import kr.ac.cbnu.cafeteria.repository.MenuRepository;
@@ -448,6 +449,34 @@ class ReservationFlowIntegrationTest {
         JsonNode today = json.readTree(mvc.perform(get("/api/menus/today").with(student("20240001")))
                 .andReturn().getResponse().getContentAsString());
         assertThat(today.findValuesAsText("name")).doesNotContain("내일메뉴");
+    }
+
+    @Test
+    @DisplayName("판매 날짜나 식사 구분이 변경된 결제대기 예약은 확정할 수 없다(DR-02, DR-12)")
+    void pendingReservationChecksCurrentMenu() throws Exception {
+        int id = reserve("20240001", lunchMenuId, noonSlotId, 1);
+        updateMenuSchedule(DAY.plusDays(1), MealType.LUNCH);
+        assertThat(attempt("20240001", id)).isEqualTo("NOT_TODAY");
+
+        updateMenuSchedule(DAY, MealType.DINNER);
+        assertThat(attempt("20240001", id)).isEqualTo("SLOT_MISMATCH");
+
+        updateMenuSchedule(DAY.plusDays(1), MealType.LUNCH);
+        CLOCK.set(DAY.plusDays(1).atTime(10, 0));
+        assertThat(attempt("20240001", id)).isEqualTo("NOT_TODAY");
+
+        assertThat(reservations.findById(id).orElseThrow().getStatus()).isEqualTo(ReservationStatus.PENDING);
+        assertThat(payments.count()).isZero();
+        assertThat(tickets.count()).isZero();
+        assertThat(remaining(lunchMenuId)).isEqualTo(10);
+    }
+
+    private void updateMenuSchedule(LocalDate date, MealType meal) throws Exception {
+        mvc.perform(put("/api/admin/menus/" + lunchMenuId).with(csrf()).with(admin())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("saleDate", date, "mealType", meal,
+                                "name", "제육덮밥", "price", 5500, "totalQuantity", 10))))
+                .andExpect(status().isOk());
     }
 
     @Test

@@ -71,6 +71,13 @@ public class ReservationService {
         // 2. 메뉴 → 시간대 순서로 잠근 뒤 재고와 정원을 다시 검사한다.
         Menu menu = locks.lock(r.getMenu());
         TimeSlot slot = locks.lock(r.getSlot());
+        LocalDateTime now = LocalDateTime.now(clock);
+        if (!menu.getSaleDate().equals(now.toLocalDate()) || !r.getCreatedAt().toLocalDate().equals(now.toLocalDate())) {
+            throw BusinessException.conflict("NOT_TODAY", "오늘의 메뉴에서 다시 예약하세요");
+        }
+        if (menu.getMealType() != slot.getMealType()) {
+            throw BusinessException.conflict("SLOT_MISMATCH", "메뉴의 식사 구분이 변경되었습니다. 수령 시간대를 다시 선택하세요");
+        }
         if (!menu.isAvailable(r.getQuantity())) {
             throw BusinessException.conflict("STOCK_SHORTAGE", "남은 수량이 부족합니다");
         }
@@ -79,7 +86,6 @@ public class ReservationService {
         }
         // 3~4. 확정 당시 단가로 총액을 계산하고(DR-11) 모의 결제를 한다.
         //      재검사 뒤에 결제하므로 재고 부족 시 환불할 결제가 생기지 않는다.
-        LocalDateTime now = LocalDateTime.now(clock);
         Payment payment = Payment.pay(r, r.calculateTotal(), method, paymentGateway, now);
         if (payment == null) {
             throw BusinessException.conflict("PAY_FAILED", "결제에 실패했습니다");   // 예약은 PENDING 유지
