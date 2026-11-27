@@ -23,9 +23,13 @@
     <div class="split">
       <div>
         <div class="scan-box"><div id="reader"></div><div id="scan-msg" class="muted small" style="padding:16px;text-align:center">카메라를 준비하는 중입니다…</div></div>
-        <form class="toolbar" id="code-form" style="margin-top:12px" novalidate>
-          <input class="input" id="code" placeholder="예약 번호 입력" inputmode="numeric" style="flex:1;min-width:160px" aria-label="예약 번호">
-          <button class="btn" type="submit">조회</button>
+        <form id="code-form" style="margin-top:12px" novalidate>
+          <label class="small" for="code">예약 번호</label>
+          <div class="toolbar">
+            <input class="input" id="code" inputmode="numeric" style="flex:1;min-width:160px" aria-describedby="code-error">
+            <button class="btn" type="submit" id="lookup">조회</button>
+          </div>
+          <div class="field-error" id="code-error" role="alert"></div>
         </form>
       </div>
       <div>
@@ -43,6 +47,9 @@
 const state = { code: null };
 const pickupButton = document.getElementById('pickup');
 const codeInput = document.getElementById('code');
+const lookupButton = document.getElementById('lookup');
+const codeForm = document.getElementById('code-form');
+let processing = false;
 let scanner = null;
 let paused = false;
 
@@ -51,10 +58,21 @@ function showResult(kind, message) {
 }
 
 /* PickupPage.onCode(code): 예약 정보를 조회해 표시하고 수령 완료 버튼을 켠다. 상태는 바꾸지 않는다(FR-15). */
-async function onCode(code) {
+async function onCode(code, manual = false) {
+  if (processing) return;
   code = String(code || '').trim();
-  if (!code) return;
+  clearFieldErrors(codeForm);
+  codeInput.removeAttribute('aria-invalid');
   showResult(null, '');
+  state.code = null;
+  pickupButton.disabled = true;
+  document.getElementById('info').textContent = '';
+  if (!code || (manual && !/^\d+$/.test(code))) {
+    if (manual) showCodeError('예약 번호를 숫자로 입력하세요');
+    return;
+  }
+  processing = true;
+  lookupButton.disabled = true;
   try {
     const t = await api('GET', '/api/admin/tickets/lookup?code=' + encodeURIComponent(code));
     const usable = t.ticketStatus === 'VALID' && t.reservationStatus === 'RESERVED';
@@ -67,16 +85,25 @@ async function onCode(code) {
     pickupButton.disabled = !usable;
     if (usable) pickupButton.focus();
   } catch (err) {
-    state.code = null;
-    pickupButton.disabled = true;
     document.getElementById('info').innerHTML = '<div class="muted">예약 정보 없음</div>';
-    showResult('error', err.message);
+    if (manual) showCodeError(err.message);
+    else showResult('error', err.message);
+  } finally {
+    processing = false;
+    lookupButton.disabled = false;
   }
+}
+
+function showCodeError(message) {
+  codeInput.setAttribute('aria-invalid', 'true');
+  showFieldError(codeInput, message);
 }
 
 /* PickupPage.onConfirm(): 수령 처리 API를 호출하고 결과를 크게 표시한다(FR-15, DR-08). */
 async function onConfirm() {
-  if (!state.code) return;
+  if (!state.code || processing) return;
+  processing = true;
+  lookupButton.disabled = true;
   setBusy(pickupButton, true);
   try {
     await api('POST', '/api/admin/pickups', { code: state.code });
@@ -86,6 +113,8 @@ async function onConfirm() {
   } finally {
     setBusy(pickupButton, false);
     pickupButton.disabled = true;
+    processing = false;
+    lookupButton.disabled = false;
     state.code = null;
     codeInput.value = '';
     codeInput.focus();
@@ -106,7 +135,7 @@ function startScanner() {
     .catch(() => { msg.textContent = '카메라를 사용할 수 없습니다. 예약 번호를 직접 입력하세요.'; });
 }
 
-document.getElementById('code-form').addEventListener('submit', e => { e.preventDefault(); onCode(codeInput.value); });
+codeForm.addEventListener('submit', e => { e.preventDefault(); onCode(codeInput.value, true); });
 pickupButton.addEventListener('click', onConfirm);
 
 (async () => {
