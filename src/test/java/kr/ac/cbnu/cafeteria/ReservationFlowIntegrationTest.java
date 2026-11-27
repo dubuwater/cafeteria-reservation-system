@@ -7,6 +7,7 @@ import kr.ac.cbnu.cafeteria.domain.Admin;
 import kr.ac.cbnu.cafeteria.domain.BusinessException;
 import kr.ac.cbnu.cafeteria.domain.MealType;
 import kr.ac.cbnu.cafeteria.domain.Menu;
+import kr.ac.cbnu.cafeteria.domain.ReservationStatus;
 import kr.ac.cbnu.cafeteria.domain.TimeSlot;
 import kr.ac.cbnu.cafeteria.repository.AdminRepository;
 import kr.ac.cbnu.cafeteria.repository.MenuRepository;
@@ -25,12 +26,14 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -45,6 +48,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -61,7 +65,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class ReservationFlowIntegrationTest {
+class ReservationFlowIntegrationTest extends TestDatabase {
 
     static final LocalDate DAY = LocalDate.of(2026, 11, 26);
     static final MutableClock CLOCK = new MutableClock(DAY.atTime(10, 0));
@@ -85,6 +89,7 @@ class ReservationFlowIntegrationTest {
     @Autowired TicketRepository tickets;
     @Autowired ReservationService reservationService;
     @Autowired DemoMenuSeeder demoMenuSeeder;
+    @Autowired JdbcTemplate jdbc;
 
     Integer lunchMenuId;
     Integer noonSlotId;
@@ -123,7 +128,7 @@ class ReservationFlowIntegrationTest {
     int reserve(String studentId, Integer menuId, Integer slotId, int qty) throws Exception {
         String body = mvc.perform(postJson("/api/reservations", Map.of("menuId", menuId, "slotId", slotId, "quantity", qty))
                         .with(student(studentId)))
-                .andExpect(status().isCreated())
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PENDING"))
                 .andReturn().getResponse().getContentAsString();
         return json.readTree(body).get("reservationId").asInt();
@@ -167,7 +172,7 @@ class ReservationFlowIntegrationTest {
                 .andExpect(jsonPath("$.name").value("김학생"));
         mvc.perform(get("/api/menus/today").session(session)).andExpect(status().isOk());
 
-        mvc.perform(post("/api/auth/logout").with(csrf()).session(session)).andExpect(status().isNoContent());
+        mvc.perform(post("/api/auth/logout").with(csrf()).session(session)).andExpect(status().isOk());
         mvc.perform(get("/api/menus/today").session(session)).andExpect(status().isUnauthorized());
     }
 
@@ -196,6 +201,8 @@ class ReservationFlowIntegrationTest {
     @Test
     @DisplayName("예약 → 결제 → 식권 → 수령: 재고 차감, 식권 1회 사용, 현황 집계(UC-04~06, UC-13~14)")
     void fullFlow() throws Exception {
+        mvc.perform(get("/api/menus/" + lunchMenuId + "/slots").with(student("20240001")))
+                .andExpect(jsonPath("$.slots[0].startTime").value("11:30"));
         int id = reserve("20240001", lunchMenuId, noonSlotId, 2);
         assertThat(remaining(lunchMenuId)).isEqualTo(10);              // 결제대기는 재고를 차지하지 않는다
 
@@ -207,6 +214,7 @@ class ReservationFlowIntegrationTest {
 
         mvc.perform(get("/api/reservations/me").with(student("20240001")))
                 .andExpect(jsonPath("$[0].status").value("RESERVED"))
+                .andExpect(jsonPath("$[0].startTime").value("12:00"))
                 .andExpect(jsonPath("$[0].totalPrice").value(11000))
                 .andExpect(jsonPath("$[0].cancellable").value(true));
         mvc.perform(get("/api/reservations/" + id + "/ticket/qr").with(student("20240001")))
@@ -214,11 +222,13 @@ class ReservationFlowIntegrationTest {
                 .andExpect(content().contentType(MediaType.IMAGE_PNG));
 
         mvc.perform(get("/api/admin/reservations/status").param("date", DAY.toString()).with(admin()))
+                .andExpect(jsonPath("$[0].startTime").value("11:30"))
                 .andExpect(jsonPath("$[?(@.slotId == " + noonSlotId + ")].reservedCount").value(1));
 
         // 예약 번호로 조회(상태 변경 없음) → QR로 수령 → 같은 식권 재사용 거절
         mvc.perform(get("/api/admin/tickets/lookup").param("code", String.valueOf(id)).with(admin()))
                 .andExpect(jsonPath("$.ticketStatus").value("VALID"))
+                .andExpect(jsonPath("$.startTime").value("12:00"))
                 .andExpect(jsonPath("$.studentName").value("김학생"));
         mvc.perform(postJson("/api/admin/pickups", Map.of("code", qrOf(id))).with(admin()))
                 .andExpect(status().isOk())
@@ -371,7 +381,7 @@ class ReservationFlowIntegrationTest {
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("PRICE_RANGE"));
         mvc.perform(postJson("/api/admin/menus", Map.of("name", "김치찌개", "price", 5500, "saleDate", DAY.toString(),
                         "mealType", "DINNER", "totalQuantity", 10)).with(admin()))
-                .andExpect(status().isCreated())
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.remainingQuantity").value(10));
     }
 
@@ -382,22 +392,62 @@ class ReservationFlowIntegrationTest {
         int a = reserve("20240001", menuId, noonSlotId, 1);
         int b = reserve("20240002", menuId, noonSlotId, 1);
 
+        assertThat(confirmTogether(a, b)).containsExactlyInAnyOrder("OK", "STOCK_SHORTAGE");
+        assertThat(remaining(menuId)).isZero();
+        assertThat(payments.count()).isEqualTo(1);
+        assertThat(tickets.count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("동시성: 다른 메뉴라도 같은 시간대의 마지막 정원은 1건만 확보한다(NFR-04)")
+    void concurrentConfirmTakesLastSlotOnce() throws Exception {
+        int slotId = timeSlots.save(new TimeSlot(MealType.LUNCH, LocalTime.of(13, 30), LocalTime.of(14, 0), 1))
+                .getSlotId();
+        int otherMenuId = createMenu("비빔밥", 5000, MealType.LUNCH, 10).getMenuId();
+        int a = reserve("20240001", lunchMenuId, slotId, 1);
+        int b = reserve("20240002", otherMenuId, slotId, 1);
+
+        assertThat(confirmTogether(a, b)).containsExactlyInAnyOrder("OK", "SLOT_FULL");
+        assertThat(remaining(lunchMenuId) + remaining(otherMenuId)).isEqualTo(19);
+        assertThat(payments.count()).isEqualTo(1);
+        assertThat(tickets.count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("식권 저장 실패 시 결제·재고·예약 상태가 모두 롤백된다(NFR-04)")
+    void ticketInsertFailureRollsBackConfirmation() throws Exception {
+        int id = reserve("20240001", lunchMenuId, noonSlotId, 2);
+        jdbc.execute("ALTER TABLE tickets ADD CONSTRAINT test_ticket_insert_failure CHECK (status <> 'VALID')");
+        try {
+            assertThatThrownBy(() -> reservationService.confirm("20240001", id, "CARD"))
+                    .hasRootCauseInstanceOf(SQLException.class)
+                    .hasStackTraceContaining("test_ticket_insert_failure");
+        } finally {
+            jdbc.execute("ALTER TABLE tickets DROP CONSTRAINT test_ticket_insert_failure");
+        }
+        assertThat(reservations.findById(id).orElseThrow().getStatus()).isEqualTo(ReservationStatus.PENDING);
+        assertThat(payments.count()).isZero();
+        assertThat(tickets.count()).isZero();
+        assertThat(remaining(lunchMenuId)).isEqualTo(10);
+        pay("20240001", id);
+    }
+
+    private List<String> confirmTogether(int a, int b) throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         CountDownLatch start = new CountDownLatch(1);
         List<Callable<String>> jobs = List.of(
                 () -> { start.await(); return attempt("20240001", a); },
                 () -> { start.await(); return attempt("20240002", b); });
-        List<Future<String>> futures = new ArrayList<>();
-        for (Callable<String> job : jobs) futures.add(pool.submit(job));
-        start.countDown();
-        List<String> results = new ArrayList<>();
-        for (Future<String> f : futures) results.add(f.get(30, TimeUnit.SECONDS));
-        pool.shutdown();
-
-        assertThat(results).containsExactlyInAnyOrder("OK", "STOCK_SHORTAGE");
-        assertThat(remaining(menuId)).isZero();
-        assertThat(payments.count()).isEqualTo(1);
-        assertThat(tickets.count()).isEqualTo(1);
+        try {
+            List<Future<String>> futures = new ArrayList<>();
+            for (Callable<String> job : jobs) futures.add(pool.submit(job));
+            start.countDown();
+            List<String> results = new ArrayList<>();
+            for (Future<String> f : futures) results.add(f.get(30, TimeUnit.SECONDS));
+            return results;
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     private String attempt(String studentId, int reservationId) {
@@ -448,6 +498,34 @@ class ReservationFlowIntegrationTest {
         JsonNode today = json.readTree(mvc.perform(get("/api/menus/today").with(student("20240001")))
                 .andReturn().getResponse().getContentAsString());
         assertThat(today.findValuesAsText("name")).doesNotContain("내일메뉴");
+    }
+
+    @Test
+    @DisplayName("판매 날짜나 식사 구분이 변경된 결제대기 예약은 확정할 수 없다(DR-02, DR-12)")
+    void pendingReservationChecksCurrentMenu() throws Exception {
+        int id = reserve("20240001", lunchMenuId, noonSlotId, 1);
+        updateMenuSchedule(DAY.plusDays(1), MealType.LUNCH);
+        assertThat(attempt("20240001", id)).isEqualTo("NOT_TODAY");
+
+        updateMenuSchedule(DAY, MealType.DINNER);
+        assertThat(attempt("20240001", id)).isEqualTo("SLOT_MISMATCH");
+
+        updateMenuSchedule(DAY.plusDays(1), MealType.LUNCH);
+        CLOCK.set(DAY.plusDays(1).atTime(10, 0));
+        assertThat(attempt("20240001", id)).isEqualTo("NOT_TODAY");
+
+        assertThat(reservations.findById(id).orElseThrow().getStatus()).isEqualTo(ReservationStatus.PENDING);
+        assertThat(payments.count()).isZero();
+        assertThat(tickets.count()).isZero();
+        assertThat(remaining(lunchMenuId)).isEqualTo(10);
+    }
+
+    private void updateMenuSchedule(LocalDate date, MealType meal) throws Exception {
+        mvc.perform(put("/api/admin/menus/" + lunchMenuId).with(csrf()).with(admin())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("saleDate", date, "mealType", meal,
+                                "name", "제육덮밥", "price", 5500, "totalQuantity", 10))))
+                .andExpect(status().isOk());
     }
 
     @Test

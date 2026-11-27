@@ -16,6 +16,9 @@ spring:
 
 server:
   port: 8080
+  tomcat:
+    threads:
+      max: 50
   servlet:
     encoding:
       charset: UTF-8
@@ -58,7 +61,7 @@ spring:
     activate:
       on-profile: mysql
   datasource:
-    url: jdbc:mysql://127.0.0.1:3306/cafeteria_db?serverTimezone=Asia/Seoul&characterEncoding=UTF-8&sessionVariables=innodb_lock_wait_timeout=5,transaction_isolation=%27READ-COMMITTED%27
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/cafeteria_db?serverTimezone=Asia/Seoul&characterEncoding=UTF-8&sessionVariables=innodb_lock_wait_timeout=5,transaction_isolation=%27READ-COMMITTED%27}
     username: ${DB_USERNAME:cafeteria}
     password: ${DB_PASSWORD:cafeteria}
     hikari:
@@ -85,6 +88,7 @@ server:
   port: 443
   ssl:
     enabled: true
+    enabled-protocols: TLSv1.2,TLSv1.3
     key-store: ${SSL_KEYSTORE:classpath:keystore.p12}
     key-store-password: ${SSL_KEYSTORE_PASSWORD:changeit}
     key-store-type: PKCS12
@@ -94,12 +98,24 @@ server:
         secure: true
 
 ---
-# 클라우드 시연용(Render 무료 플랜): 프록시 뒤 HTTPS, 메모리 DB.
-# 서버가 잠들었다 깨면 데이터가 초기화되고, 계정·시간대·그날 메뉴가 다시 생성된다.
+# Render HTTPS 프록시 설정. 영속 DB를 사용하려면 render,mysql 프로필을 활성화한다.
 spring:
   config:
     activate:
       on-profile: render
+server:
+  port: ${PORT:8080}
+  forward-headers-strategy: framework   # Render의 HTTPS 프록시 헤더(X-Forwarded-Proto)를 신뢰
+  servlet:
+    session:
+      cookie:
+        secure: true
+---
+# Render 단독 프로필의 시연용 DB. 프로세스가 재시작되면 초기화된다.
+spring:
+  config:
+    activate:
+      on-profile: "render & !mysql"
   datasource:
     url: jdbc:h2:mem:cafeteria;MODE=MySQL;DATABASE_TO_LOWER=TRUE;NON_KEYWORDS=USER;LOCK_TIMEOUT=5000;DB_CLOSE_DELAY=-1
     username: sa
@@ -110,16 +126,6 @@ spring:
     hibernate:
       ddl-auto: create
 server:
-  port: ${PORT:8080}
-  forward-headers-strategy: framework   # Render의 HTTPS 프록시 헤더(X-Forwarded-Proto)를 신뢰
   tomcat:
     threads:
       max: 30
-  servlet:
-    session:
-      cookie:
-        secure: true
-app:
-  seed:
-    accounts: true
-    demo-menus: true

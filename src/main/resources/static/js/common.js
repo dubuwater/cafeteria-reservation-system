@@ -28,7 +28,7 @@ async function api(method, url, body) {
     const token = readCookie('XSRF-TOKEN');
     if (token) headers['X-XSRF-TOKEN'] = token;
   }
-  let res;
+  let res, text;
   try {
     res = await fetch(url, {
       method,
@@ -37,12 +37,12 @@ async function api(method, url, body) {
       credentials: 'same-origin',
       signal: controller.signal,
     });
+    text = await res.text();
   } catch (e) {
     throw { code: 'NETWORK', message: e.name === 'AbortError' ? '응답이 늦어지고 있습니다. 다시 시도하세요' : '서버에 연결할 수 없습니다' };
   } finally {
     clearTimeout(timer);
   }
-  const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
   if (res.status === 401 && !(data && data.code === 'LOGIN_FAILED')) {

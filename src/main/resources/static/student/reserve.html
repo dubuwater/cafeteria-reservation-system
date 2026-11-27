@@ -23,7 +23,8 @@
       <button type="button" id="plus" aria-label="수량 늘리기">+</button>
     </div>
     <div class="section-label" id="slot-label">수령 시간대</div>
-    <div id="slots" role="radiogroup" aria-labelledby="slot-label"></div>
+    <div id="slots" role="radiogroup" aria-labelledby="slot-label" aria-describedby="slot-error"></div>
+    <div class="field-error" id="slot-error" role="alert"></div>
     <div class="total"><span>총 금액</span><span id="total">0원</span></div>
     <button class="btn btn-primary btn-block" id="pay" type="button" disabled>결제하기</button>
   </main>
@@ -36,8 +37,9 @@
 <script>
 /* ReservePage — 설계서 5.2 */
 const menuId = queryParam('menuId');
-const state = { menu: null, qty: 1, slotId: null };
+const state = { menu: null, qty: 1, slotId: null, submitting: false };
 const payButton = document.getElementById('pay');
+const slotError = document.getElementById('slot-error');
 
 /* ReservePage.init(menuId): 메뉴와 식사 구분에 맞는 시간대를 불러와 마감 시간대를 비활성화한다(FR-04, DR-12). */
 async function init() {
@@ -46,48 +48,59 @@ async function init() {
   document.getElementById('menu-info').textContent =
     data.menu.name + ' · ' + won(data.menu.price) + ' · ' + MEAL_LABEL[data.menu.mealType];
   document.getElementById('slot-label').textContent = '수령 시간대(' + MEAL_LABEL[data.menu.mealType] + ')';
-  if (state.slotId && data.slots.some(s => s.slotId === state.slotId && s.full)) state.slotId = null;
+  const soldOut = data.menu.remainingQuantity === 0;
+  if (soldOut || !data.slots.some(s => s.slotId === state.slotId && !s.full)) state.slotId = null;
   document.getElementById('slots').innerHTML = data.slots.map(s => `
-    <label class="option${s.full ? ' disabled' : ''}${state.slotId === s.slotId ? ' selected' : ''}">
-      <input type="radio" name="slot" value="${s.slotId}" ${s.full ? 'disabled' : ''} ${state.slotId === s.slotId ? 'checked' : ''}>
+    <label class="option${soldOut || s.full ? ' disabled' : ''}${state.slotId === s.slotId ? ' selected' : ''}">
+      <input type="radio" name="slot" value="${s.slotId}" ${soldOut || s.full ? 'disabled' : ''} ${state.slotId === s.slotId ? 'checked' : ''}>
       <span>${slotLabel(s.startTime, s.endTime)}</span>
       <span class="tail">${s.full ? '마감' : '여유 ' + (s.capacity - s.reservedCount) + '건'}</span>
     </label>`).join('') || '<div class="muted">선택할 수 있는 시간대가 없습니다</div>';
   document.querySelectorAll('input[name=slot]').forEach(r => r.addEventListener('change', () => {
     state.slotId = Number(r.value);
     document.querySelectorAll('.option').forEach(o => o.classList.toggle('selected', o.contains(r)));
-    payButton.disabled = false;
+    slotError.textContent = '';
+    updatePayButton();
   }));
-  if (state.menu.remainingQuantity === 0) {
-    showToast('품절된 메뉴입니다');
-    payButton.disabled = true;
-  } else {
-    payButton.disabled = state.slotId === null;
-  }
+  if (soldOut) slotError.textContent = '품절된 메뉴입니다';
   onQtyChange(0);
+  updatePayButton();
+}
+
+function updatePayButton() {
+  payButton.disabled = state.submitting || state.slotId === null || !state.menu?.remainingQuantity;
 }
 
 /* ReservePage.onQtyChange(delta): 수량을 1~3, 남은 수량 이하로 제한하고 총액을 즉시 갱신한다. */
 function onQtyChange(delta) {
-  const maxQty = Math.max(1, Math.min(3, state.menu.remainingQuantity));
+  if (!state.menu) return;
+  const maxQty = Math.min(3, state.menu.remainingQuantity);
   state.qty = Math.min(Math.max(state.qty + delta, 1), maxQty);
   document.getElementById('qty').textContent = state.qty;
-  document.getElementById('minus').disabled = state.qty === 1;
+  document.getElementById('minus').disabled = state.qty <= 1;
   document.getElementById('plus').disabled = state.qty === maxQty;
   document.getElementById('total').textContent = won(state.menu.price * state.qty);
 }
 
 /* ReservePage.onPay(): 결제대기 예약을 만들고 결제 화면(S04)으로 이동한다(FR-05). */
 async function onPay() {
-  if (state.slotId === null) return;
+  if (payButton.disabled) return;
+  state.submitting = true;
   setBusy(payButton, true);
   try {
     const r = await api('POST', '/api/reservations', { menuId: state.menu.menuId, slotId: state.slotId, quantity: state.qty });
     location.href = '/student/pay.html?id=' + r.reservationId;
   } catch (err) {
+    slotError.textContent = err.message;
+    try {
+      await init();
+    } catch (refreshError) {
+      state.slotId = null;
+      slotError.textContent = refreshError.message;
+    }
+    state.submitting = false;
     setBusy(payButton, false);
-    showToast(err.message);
-    await init();                    // 최신 재고·마감 상태로 다시 그린다
+    updatePayButton();
   }
 }
 

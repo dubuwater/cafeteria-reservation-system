@@ -52,7 +52,12 @@ async function onConfirm() {
     await api('POST', '/api/reservations/' + reservationId + '/payment', { method: checked.value });
     location.replace('/student/ticket.html?id=' + reservationId);   // 뒤로 가기로 재결제 방지
   } catch (err) {
-    if (err.code === 'STOCK_SHORTAGE' || err.code === 'SLOT_FULL') {
+    if (err.code === 'NOT_TODAY') {
+      alert(err.message);
+      location.replace('/student/menus.html');
+      return;
+    }
+    if (['STOCK_SHORTAGE', 'SLOT_FULL', 'SLOT_MISMATCH'].includes(err.code)) {
       alert(err.message);
       location.replace('/student/reserve.html?menuId=' + menuId);  // S03에서 다시 선택
       return;
