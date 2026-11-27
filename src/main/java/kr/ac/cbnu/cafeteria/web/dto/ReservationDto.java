@@ -1,5 +1,6 @@
 package kr.ac.cbnu.cafeteria.web.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import kr.ac.cbnu.cafeteria.domain.MealType;
 import kr.ac.cbnu.cafeteria.domain.Reservation;
 import kr.ac.cbnu.cafeteria.domain.ReservationStatus;
@@ -11,7 +12,9 @@ import java.time.LocalTime;
 
 /** 예약 정보(S04 주문 요약, S06 목록). cancellable은 서버의 canCancel() 결과이다. */
 public record ReservationDto(Integer reservationId, Integer menuId, String menuName, LocalDate saleDate,
-                             MealType mealType, Integer slotId, LocalTime startTime, LocalTime endTime,
+                             MealType mealType, Integer slotId,
+                             @JsonFormat(pattern = "HH:mm") LocalTime startTime,
+                             @JsonFormat(pattern = "HH:mm") LocalTime endTime,
                              int quantity, int totalPrice, ReservationStatus status, LocalDateTime createdAt,
                              boolean cancellable, LocalDateTime cancelDeadline, TicketStatus ticketStatus) {
 

@@ -93,7 +93,7 @@ public class SecurityConfig {
             .logout(logout -> logout
                 .logoutUrl("/api/auth/logout")
                 .deleteCookies("JSESSIONID")
-                .logoutSuccessHandler((req, res, auth) -> res.setStatus(HttpServletResponse.SC_NO_CONTENT)))
+                .logoutSuccessHandler((req, res, auth) -> res.setStatus(HttpServletResponse.SC_OK)))
             .sessionManagement(session -> session
                 .maximumSessions(1)
                 .sessionRegistry(sessionRegistry)

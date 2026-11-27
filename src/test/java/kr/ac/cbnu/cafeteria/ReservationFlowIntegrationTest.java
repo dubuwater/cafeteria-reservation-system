@@ -124,7 +124,7 @@ class ReservationFlowIntegrationTest {
     int reserve(String studentId, Integer menuId, Integer slotId, int qty) throws Exception {
         String body = mvc.perform(postJson("/api/reservations", Map.of("menuId", menuId, "slotId", slotId, "quantity", qty))
                         .with(student(studentId)))
-                .andExpect(status().isCreated())
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PENDING"))
                 .andReturn().getResponse().getContentAsString();
         return json.readTree(body).get("reservationId").asInt();
@@ -168,7 +168,7 @@ class ReservationFlowIntegrationTest {
                 .andExpect(jsonPath("$.name").value("김학생"));
         mvc.perform(get("/api/menus/today").session(session)).andExpect(status().isOk());
 
-        mvc.perform(post("/api/auth/logout").with(csrf()).session(session)).andExpect(status().isNoContent());
+        mvc.perform(post("/api/auth/logout").with(csrf()).session(session)).andExpect(status().isOk());
         mvc.perform(get("/api/menus/today").session(session)).andExpect(status().isUnauthorized());
     }
 
@@ -197,6 +197,8 @@ class ReservationFlowIntegrationTest {
     @Test
     @DisplayName("예약 → 결제 → 식권 → 수령: 재고 차감, 식권 1회 사용, 현황 집계(UC-04~06, UC-13~14)")
     void fullFlow() throws Exception {
+        mvc.perform(get("/api/menus/" + lunchMenuId + "/slots").with(student("20240001")))
+                .andExpect(jsonPath("$.slots[0].startTime").value("11:30"));
         int id = reserve("20240001", lunchMenuId, noonSlotId, 2);
         assertThat(remaining(lunchMenuId)).isEqualTo(10);              // 결제대기는 재고를 차지하지 않는다
 
@@ -208,6 +210,7 @@ class ReservationFlowIntegrationTest {
 
         mvc.perform(get("/api/reservations/me").with(student("20240001")))
                 .andExpect(jsonPath("$[0].status").value("RESERVED"))
+                .andExpect(jsonPath("$[0].startTime").value("12:00"))
                 .andExpect(jsonPath("$[0].totalPrice").value(11000))
                 .andExpect(jsonPath("$[0].cancellable").value(true));
         mvc.perform(get("/api/reservations/" + id + "/ticket/qr").with(student("20240001")))
@@ -215,11 +218,13 @@ class ReservationFlowIntegrationTest {
                 .andExpect(content().contentType(MediaType.IMAGE_PNG));
 
         mvc.perform(get("/api/admin/reservations/status").param("date", DAY.toString()).with(admin()))
+                .andExpect(jsonPath("$[0].startTime").value("11:30"))
                 .andExpect(jsonPath("$[?(@.slotId == " + noonSlotId + ")].reservedCount").value(1));
 
         // 예약 번호로 조회(상태 변경 없음) → QR로 수령 → 같은 식권 재사용 거절
         mvc.perform(get("/api/admin/tickets/lookup").param("code", String.valueOf(id)).with(admin()))
                 .andExpect(jsonPath("$.ticketStatus").value("VALID"))
+                .andExpect(jsonPath("$.startTime").value("12:00"))
                 .andExpect(jsonPath("$.studentName").value("김학생"));
         mvc.perform(postJson("/api/admin/pickups", Map.of("code", qrOf(id))).with(admin()))
                 .andExpect(status().isOk())
@@ -372,7 +377,7 @@ class ReservationFlowIntegrationTest {
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("PRICE_RANGE"));
         mvc.perform(postJson("/api/admin/menus", Map.of("name", "김치찌개", "price", 5500, "saleDate", DAY.toString(),
                         "mealType", "DINNER", "totalQuantity", 10)).with(admin()))
-                .andExpect(status().isCreated())
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.remainingQuantity").value(10));
     }
 

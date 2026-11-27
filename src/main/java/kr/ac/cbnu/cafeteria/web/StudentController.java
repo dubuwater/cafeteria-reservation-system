@@ -10,7 +10,6 @@ import kr.ac.cbnu.cafeteria.web.dto.ReservationDto;
 import kr.ac.cbnu.cafeteria.web.dto.ReservationRequest;
 import kr.ac.cbnu.cafeteria.web.dto.TicketDto;
 import org.springframework.http.CacheControl;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -18,7 +17,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -52,7 +50,6 @@ public class StudentController {
 
     /** UC-04 결제대기 예약 생성(S03) */
     @PostMapping("/api/reservations")
-    @ResponseStatus(HttpStatus.CREATED)
     public ReservationDto reserve(@RequestBody ReservationRequest req, Authentication auth) {
         return studentService.makeReservation(auth.getName(), req.menuId(), req.slotId(), req.quantity());
     }
